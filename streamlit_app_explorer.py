@@ -1,7 +1,7 @@
 """Semantic View Explorer v3 - Cortex Analyst NL Q&A + interactive query builder.
 
-Deployed to: @MY_DB.PUBLIC.SV_EXPLORER_STAGE/streamlit_app.py
-Streamlit object: MY_DB.PUBLIC.SEMANTIC_VIEW_EXPLORER
+Deployed to: @<DB>.PUBLIC.AGMP_EXPLORER_STAGE/streamlit_app.py
+Streamlit object: <DB>.PUBLIC.SEMANTIC_VIEW_EXPLORER
 """
 import json
 import pandas as pd
@@ -11,8 +11,9 @@ from snowflake.snowpark.context import get_active_session
 
 st.set_page_config(page_title="Semantic View Explorer", page_icon=":mag:", layout="wide")
 session = get_active_session()
-CATALOG = "MY_DB.SEMANTIC_CATALOG"
-PUBLIC = "MY_DB.PUBLIC"
+DB = session.sql("SELECT CURRENT_DATABASE()").collect()[0][0]
+CATALOG = f"{DB}.SEMANTIC_CATALOG"
+PUBLIC = f"{DB}.PUBLIC"
 
 # ---------- helpers ----------
 def collect_rows(sql, params=None):
@@ -34,9 +35,9 @@ def log_feedback(view_fqn, query_text, answered, query_id=None, score=None):
     cat, sch, nm = view_fqn.split(".")
     try:
         session.sql(
-            f"INSERT INTO {CATALOG}.SV_ANALYST_FEEDBACK "
+            f"INSERT INTO {CATALOG}.AGMP_ANALYST_FEEDBACK "
             f"(view_catalog, view_schema, view_name, version_id, query_text, query_id, answered, human_score) "
-            f"SELECT ?,?,?,(SELECT MAX(version_id) FROM {CATALOG}.SV_REGISTRY "
+            f"SELECT ?,?,?,(SELECT MAX(version_id) FROM {CATALOG}.AGMP_REGISTRY "
             f"             WHERE view_catalog=? AND view_schema=? AND view_name=?), "
             f"       ?,?,?,?",
             params=[cat, sch, nm, cat, sch, nm, query_text, query_id, answered, score]
@@ -72,7 +73,7 @@ st.caption(f"Ask questions, build queries, explore  |  user: `{get_user()}`")
 
 views = df(
     f"SELECT view_catalog||'.'||view_schema||'.'||view_name AS FQN, version_id, deployed_at "
-    f"FROM {CATALOG}.SV_REGISTRY WHERE status='DEPLOYED' ORDER BY deployed_at DESC"
+    f"FROM {CATALOG}.AGMP_REGISTRY WHERE status='DEPLOYED' ORDER BY deployed_at DESC"
 )
 if views.empty:
     st.error("No deployed semantic views found.")
@@ -82,7 +83,7 @@ view_fqn = st.sidebar.selectbox("Semantic view:", views["FQN"].tolist())
 cat, sch, nm = view_fqn.split(".")
 
 # ---------- entitlement gate ----------
-ent_raw = session.sql(f"CALL {PUBLIC}.SP_SV_CHECK_ENTITLEMENT('{view_fqn}')").collect()[0][0]
+ent_raw = session.sql(f"CALL {PUBLIC}.SP_AGMP_CHECK_ENTITLEMENT('{view_fqn}')").collect()[0][0]
 ent = json.loads(ent_raw) if isinstance(ent_raw, str) else ent_raw
 if ent.get("status") != "ENTITLED":
     st.warning(f"Access status: **{ent.get('status')}**.")
@@ -196,7 +197,7 @@ desc_facts   = desc.loc[desc[ok_col]=='FACT',      nm_col].drop_duplicates().tol
 cols = df(
     f"SELECT source_table, column_name, data_type, semantic_role, "
     f"       COALESCE(human_description, ai_description) AS description, is_time_dimension "
-    f"FROM {CATALOG}.SV_COLUMNS "
+    f"FROM {CATALOG}.AGMP_COLUMNS "
     f"WHERE view_catalog='{cat}' AND view_schema='{sch}' AND view_name='{nm}' "
     f"ORDER BY semantic_role, source_table, ordinal_position"
 )

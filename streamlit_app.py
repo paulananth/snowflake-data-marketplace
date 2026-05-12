@@ -20,8 +20,9 @@ from snowflake.snowpark.context import get_active_session
 st.set_page_config(page_title="Semantic View Builder", page_icon=":bar_chart:", layout="wide")
 session = get_active_session()
 
-CATALOG = "MY_DB.SEMANTIC_CATALOG"
-PUBLIC = "MY_DB.PUBLIC"
+DB = session.sql("SELECT CURRENT_DATABASE()").collect()[0][0]
+CATALOG = f"{DB}.SEMANTIC_CATALOG"
+PUBLIC = f"{DB}.PUBLIC"
 
 
 # ---------------------------------------------------------------------------- #
@@ -42,7 +43,7 @@ def get_current_user():
 def list_deployed_views():
     return df(
         f"SELECT view_catalog||'.'||view_schema||'.'||view_name AS FQN, version_id, status, deployed_at "
-        f"FROM {CATALOG}.SV_REGISTRY WHERE status='DEPLOYED' ORDER BY deployed_at DESC"
+        f"FROM {CATALOG}.AGMP_REGISTRY WHERE status='DEPLOYED' ORDER BY deployed_at DESC"
     )
 
 
@@ -69,18 +70,17 @@ with tab1:
     )
 
     default_tables = (
-        "SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.CUSTOMER\n"
-        "SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.ORDERS\n"
-        "SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.LINEITEM"
+        "YOUR_DB.YOUR_SCHEMA.TABLE1\n"
+        "YOUR_DB.YOUR_SCHEMA.TABLE2"
     )
     tables_text = st.text_area(
         "Source tables (one per line, fully qualified, top-of-hierarchy first):",
         value=default_tables, height=120
     )
     target_view = st.text_input("Target semantic view (DB.SCHEMA.NAME):",
-                                value="MY_DB.PUBLIC.TPCH_ANALYSIS_VIEW")
+                                value=f"{DB}.PUBLIC.AGMP")
     view_comment = st.text_input("View comment:",
-                                 value="TPC-H semantic view: customer-orders-lineitem hierarchy")
+                                 value="Agentic marketplace semantic view")
 
     if st.button(":rocket: Build Semantic View", type="primary"):
         tables = [t.strip() for t in tables_text.splitlines() if t.strip()]
@@ -90,7 +90,7 @@ with tab1:
             with st.spinner("Running end-to-end pipeline..."):
                 arr_sql = "ARRAY_CONSTRUCT(" + ",".join(f"'{t}'" for t in tables) + ")"
                 row = session.sql(
-                    f"CALL {PUBLIC}.SP_SV_BUILD_END_TO_END({arr_sql}, {arr_sql}, "
+                    f"CALL {PUBLIC}.SP_AGMP_BUILD_END_TO_END({arr_sql}, {arr_sql}, "
                     f"'{target_view}', '{view_comment.replace(chr(39),chr(39)+chr(39))}')"
                 ).collect()[0][0]
                 result = json.loads(row) if isinstance(row, str) else row
@@ -120,7 +120,7 @@ with tab2:
             f"       ai_description, human_description, "
             f"       COALESCE(human_description, ai_description) AS effective_description, "
             f"       is_time_dimension "
-            f"FROM {CATALOG}.SV_COLUMNS "
+            f"FROM {CATALOG}.AGMP_COLUMNS "
             f"WHERE view_catalog='{cat}' AND view_schema='{sch}' AND view_name='{nm}' "
             f"ORDER BY source_table, ordinal_position"
         )
@@ -155,7 +155,7 @@ with tab2:
                 old_role = old.iloc[0].SEMANTIC_ROLE
                 if (r.HUMAN_DESCRIPTION or "") != (old_human or "") or r.SEMANTIC_ROLE != old_role:
                     session.sql(
-                        f"UPDATE {CATALOG}.SV_COLUMNS "
+                        f"UPDATE {CATALOG}.AGMP_COLUMNS "
                         f"SET human_description=?, description_source='HUMAN_EDITED', "
                         f"    semantic_role=?, last_edited_by=?, last_edited_at=CURRENT_TIMESTAMP() "
                         f"WHERE view_catalog=? AND view_schema=? AND view_name=? "
@@ -175,7 +175,7 @@ with tab3:
     history = df(f"SELECT view_catalog||'.'||view_schema||'.'||view_name AS FQN, "
                  f"       version_id, version_tag, status, created_by, approved_by, "
                  f"       created_at, deployed_at, archived_at, notes "
-                 f"FROM {CATALOG}.SV_REGISTRY ORDER BY created_at DESC LIMIT 100")
+                 f"FROM {CATALOG}.AGMP_REGISTRY ORDER BY created_at DESC LIMIT 100")
     if history.empty:
         st.info("No versions yet.")
     else:
@@ -186,7 +186,7 @@ with tab3:
                            options=[f"{r.FQN} v{r.VERSION_ID} ({r.STATUS})" for _, r in history.iterrows()])
         if sel:
             vid = int(sel.split(" v")[1].split(" ")[0])
-            ddl_row = df(f"SELECT view_ddl FROM {CATALOG}.SV_REGISTRY WHERE version_id={vid}")
+            ddl_row = df(f"SELECT view_ddl FROM {CATALOG}.AGMP_REGISTRY WHERE version_id={vid}")
             if not ddl_row.empty:
                 st.code(ddl_row.iloc[0].VIEW_DDL, language="sql")
 
@@ -204,9 +204,9 @@ with tab4:
         cat, sch, nm = sel.split(".")
 
         if st.button(":robot_face: Run AI Domain Suggestion"):
-            with st.spinner("Calling SP_SV_SUGGEST_DOMAINS..."):
+            with st.spinner("Calling SP_AGMP_SUGGEST_DOMAINS..."):
                 result = session.sql(
-                    f"CALL {PUBLIC}.SP_SV_SUGGEST_DOMAINS('{sel}')"
+                    f"CALL {PUBLIC}.SP_AGMP_SUGGEST_DOMAINS('{sel}')"
                 ).collect()[0][0]
                 if isinstance(result, str): result = json.loads(result)
                 st.json(result)
@@ -214,7 +214,7 @@ with tab4:
         domains = df(
             f"SELECT domain_id, domain_name, ai_suggested_domain, ai_confidence_score, "
             f"       human_confirmed_domain, confirmed_by, steward_user, steward_role, description "
-            f"FROM {CATALOG}.SV_DOMAINS "
+            f"FROM {CATALOG}.AGMP_DOMAINS "
             f"WHERE view_catalog='{cat}' AND view_schema='{sch}' AND view_name='{nm}' "
             f"ORDER BY domain_id DESC LIMIT 10"
         )
@@ -230,7 +230,7 @@ with tab4:
                 steward = colB.text_input("Steward user:", value=d.STEWARD_USER or get_current_user(), key=f"stew_{d.DOMAIN_ID}")
                 if colC.button("Save", key=f"save_dom_{d.DOMAIN_ID}"):
                     session.sql(
-                        f"UPDATE {CATALOG}.SV_DOMAINS "
+                        f"UPDATE {CATALOG}.AGMP_DOMAINS "
                         f"SET human_confirmed_domain=?, confirmed_by=?, confirmed_at=CURRENT_TIMESTAMP(), "
                         f"    steward_user=? "
                         f"WHERE domain_id=?",
@@ -255,13 +255,13 @@ with tab5:
         if st.button(":key: Submit Request"):
             with st.spinner("Submitting..."):
                 result = session.sql(
-                    f"CALL {PUBLIC}.SP_SV_REQUEST_ACCESS('{v}', '{just.replace(chr(39),chr(39)+chr(39))}', '{sens}')"
+                    f"CALL {PUBLIC}.SP_AGMP_REQUEST_ACCESS('{v}', '{just.replace(chr(39),chr(39)+chr(39))}', '{sens}')"
                 ).collect()[0][0]
                 if isinstance(result, str): result = json.loads(result)
                 st.json(result)
 
         if st.button(":mag: Check My Entitlement"):
-            r = session.sql(f"CALL {PUBLIC}.SP_SV_CHECK_ENTITLEMENT('{v}')").collect()[0][0]
+            r = session.sql(f"CALL {PUBLIC}.SP_AGMP_CHECK_ENTITLEMENT('{v}')").collect()[0][0]
             if isinstance(r, str): r = json.loads(r)
             st.json(r)
 
@@ -270,7 +270,7 @@ with tab5:
     requests = df(
         f"SELECT request_id, requestor_user, view_catalog||'.'||view_schema||'.'||view_name AS view_fqn, "
         f"       sensitivity_level, justification, status, requested_at, reviewer_notes "
-        f"FROM {CATALOG}.SV_ACCESS_REQUESTS "
+        f"FROM {CATALOG}.AGMP_ACCESS_REQUESTS "
         f"ORDER BY requested_at DESC LIMIT 50"
     )
     if requests.empty:
@@ -286,13 +286,13 @@ with tab5:
             ca, cb = st.columns(2)
             if ca.button(":white_check_mark: Approve & Grant"):
                 r = session.sql(
-                    f"CALL {PUBLIC}.SP_SV_APPROVE_ACCESS({int(rid)}, '{grant_role}', '{notes.replace(chr(39),chr(39)+chr(39))}')"
+                    f"CALL {PUBLIC}.SP_AGMP_APPROVE_ACCESS({int(rid)}, '{grant_role}', '{notes.replace(chr(39),chr(39)+chr(39))}')"
                 ).collect()[0][0]
                 if isinstance(r, str): r = json.loads(r)
                 st.json(r)
             if cb.button(":x: Deny"):
                 r = session.sql(
-                    f"CALL {PUBLIC}.SP_SV_DENY_ACCESS({int(rid)}, '{notes.replace(chr(39),chr(39)+chr(39))}')"
+                    f"CALL {PUBLIC}.SP_AGMP_DENY_ACCESS({int(rid)}, '{notes.replace(chr(39),chr(39)+chr(39))}')"
                 ).collect()[0][0]
                 if isinstance(r, str): r = json.loads(r)
                 st.json(r)
@@ -306,14 +306,14 @@ with tab6:
 
     if st.button(":arrows_counterclockwise: Refresh usage from QUERY_HISTORY"):
         with st.spinner("Aggregating..."):
-            r = session.sql(f"CALL {PUBLIC}.SP_SV_AGGREGATE_USAGE()").collect()[0][0]
+            r = session.sql(f"CALL {PUBLIC}.SP_AGMP_AGGREGATE_USAGE()").collect()[0][0]
             if isinstance(r, str): r = json.loads(r)
             st.success(f"Processed {r.get('views_processed')} view(s)")
 
     usage = df(
         f"SELECT view_catalog||'.'||view_schema||'.'||view_name AS view_fqn, "
         f"       query_date, query_count, unique_users, answered_count, unanswered_count "
-        f"FROM {CATALOG}.SV_USAGE_ANALYTICS ORDER BY query_date DESC"
+        f"FROM {CATALOG}.AGMP_USAGE_ANALYTICS ORDER BY query_date DESC"
     )
     if usage.empty:
         st.info("No usage data yet. Click Refresh above to aggregate from QUERY_HISTORY (last 7 days).")
@@ -325,13 +325,13 @@ with tab6:
     st.divider()
     st.subheader("Catalog Health Snapshot")
     snap = df(f"""
-        SELECT 'SV_REGISTRY'           AS table_name, COUNT(*) AS rows FROM {CATALOG}.SV_REGISTRY
-        UNION ALL SELECT 'SV_COLUMNS',           COUNT(*) FROM {CATALOG}.SV_COLUMNS
-        UNION ALL SELECT 'SV_RELATIONSHIPS',     COUNT(*) FROM {CATALOG}.SV_RELATIONSHIPS
-        UNION ALL SELECT 'SV_DOMAINS',           COUNT(*) FROM {CATALOG}.SV_DOMAINS
-        UNION ALL SELECT 'SV_ACCESS_REQUESTS',   COUNT(*) FROM {CATALOG}.SV_ACCESS_REQUESTS
-        UNION ALL SELECT 'SV_TEST_RESULTS',      COUNT(*) FROM {CATALOG}.SV_TEST_RESULTS
-        UNION ALL SELECT 'SV_ANALYST_FEEDBACK',  COUNT(*) FROM {CATALOG}.SV_ANALYST_FEEDBACK
-        UNION ALL SELECT 'SV_USAGE_ANALYTICS',   COUNT(*) FROM {CATALOG}.SV_USAGE_ANALYTICS
+        SELECT 'AGMP_REGISTRY'           AS table_name, COUNT(*) AS rows FROM {CATALOG}.AGMP_REGISTRY
+        UNION ALL SELECT 'AGMP_COLUMNS',           COUNT(*) FROM {CATALOG}.AGMP_COLUMNS
+        UNION ALL SELECT 'AGMP_RELATIONSHIPS',     COUNT(*) FROM {CATALOG}.AGMP_RELATIONSHIPS
+        UNION ALL SELECT 'AGMP_DOMAINS',           COUNT(*) FROM {CATALOG}.AGMP_DOMAINS
+        UNION ALL SELECT 'AGMP_ACCESS_REQUESTS',   COUNT(*) FROM {CATALOG}.AGMP_ACCESS_REQUESTS
+        UNION ALL SELECT 'AGMP_TEST_RESULTS',      COUNT(*) FROM {CATALOG}.AGMP_TEST_RESULTS
+        UNION ALL SELECT 'AGMP_ANALYST_FEEDBACK',  COUNT(*) FROM {CATALOG}.AGMP_ANALYST_FEEDBACK
+        UNION ALL SELECT 'AGMP_USAGE_ANALYTICS',   COUNT(*) FROM {CATALOG}.AGMP_USAGE_ANALYTICS
     """)
     st.dataframe(snap, use_container_width=True, hide_index=True)
